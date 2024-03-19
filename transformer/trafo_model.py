@@ -18,7 +18,7 @@ dropout = 0.0
 
 torch.manual_seed(1337)
 
-with open(r'./input.txt', 'r', encoding='uft-8') as file:
+with open(r'../text_input/input.txt', 'r', encoding='uft-8') as file:
     text = file.read()
 
 chars = sorted(list(set(text)))
