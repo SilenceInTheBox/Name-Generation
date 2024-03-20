@@ -18,7 +18,7 @@ dropout = 0.0
 
 torch.manual_seed(1337)
 
-with open(r'../text_input/input.txt', 'r', encoding='uft-8') as file:
+with open(r'name generation/text_input/input.txt', 'r', encoding='utf-8') as file:
     text = file.read()
 
 chars = sorted(list(set(text)))
@@ -97,19 +97,61 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        '''WATCH OUT! output shape has to be revised!'''
+        '''WATCH OUT! output shape has to be revised!
+        -> seems alright...'''
         B, T, C = x.shape
         x = x.view((B, 1, T, C))
         k = x @ self.key
         q = x @ self.query
         v = x @ self.value
+        # k,q,v: (B,nH,T,sH)
 
         wei = q @ k.transpose(-1, -2) * C**-0.5
         wei = wei.masked_fill(self.tril == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
+        # wei: (B,nH,T,T)
 
         out = wei @ v
+        # out: (B,nH,T,sH)
         out = out.permute(0, 2, 1, 3).reshape((B, T, -1))
+        # out: (B,T,nH,sH) -> (B,T,nH*sH) = (B,T,C)
         return out
 
 # TODO: FFWD Module, LayerNorm Module, Final Module, Optimizer
+
+
+class Block(nn.Module):
+    # TODO: add layernorm and residual connection
+    def __init__(self, n_emb, n_heads):
+        super().__init__()
+        self.linlayer = nn.Linear(n_emb, n_emb)
+        self.attention = MultiHeadAttention(n_heads, n_emb / n_heads)
+
+    def forward(self, x):
+        x = self.linlayer(x)
+        x = self.attention(x)
+        return x
+
+
+class Predictor(nn.Module):
+    # TODO: add generation method. think about how the loss is evaluated
+    def __init__(self, n_emb):
+        super().__init__()
+        self.emb = nn.Embedding(vocab_size, n_emb)
+        self.block = Block(n_emb, 4)
+        self.linear = nn.Linear(n_emb, vocab_size)
+
+    def forward(self, x):   # (B,T) -> (B,T,n_emb) -> machine -> (B,T,vocab_size)
+        x = self.emb(x)
+        x = self.block(x)
+        x = self.linear(x)
+        return x
+
+
+if __name__ == '__main__':
+    print('<CASUAL DEBUG>\n')
+    print(text[:100])
+
+    xb, yb = get_batch(0.8)
+
+    print(xb.shape, yb.shape)
