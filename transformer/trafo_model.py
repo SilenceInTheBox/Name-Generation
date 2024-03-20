@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+# last steps need to be taken for a fully working transformer. merge the modules below to a working model.
+# further, we need to implement some more feature such as layernorm and residual connections.
+
 # hyperparameters
 batch_size = 16
 block_size = 8
