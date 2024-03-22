@@ -21,7 +21,7 @@ dropout = 0.0
 
 torch.manual_seed(1337)
 
-with open(r'name generation/text_input/input.txt', 'r', encoding='utf-8') as file:
+with open(r'text_input/input.txt', 'r', encoding='utf-8') as file:
     text = file.read()
 
 chars = sorted(list(set(text)))
@@ -47,19 +47,19 @@ def get_batch(split):
     return x, y
 
 
-@torch.no_grad()
-def estimate_loss():
-    out = {}
-    model.eval()
-    for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(split)
-            logits, loss = model(X, Y)
-            losses[k] = loss.item()
-        out[split] = losses.mean()
-    model.train()
-    return out
+# @torch.no_grad()
+# def estimate_loss():
+#     out = {}
+#     model.eval()
+#     for split in ['train', 'val']:
+#         losses = torch.zeros(eval_iters)
+#         for k in range(eval_iters):
+#             X, Y = get_batch(split)
+#             logits, loss = model(X, Y)
+#             losses[k] = loss.item()
+#         out[split] = losses.mean()
+#     model.train()
+#     return out
 
 
 class Head(nn.Module):
@@ -110,13 +110,14 @@ class MultiHeadAttention(nn.Module):
         # k,q,v: (B,nH,T,sH)
 
         wei = q @ k.transpose(-1, -2) * C**-0.5
-        wei = wei.masked_fill(self.tril == 0, float('-inf'))
+        # wei: (B,nH,T,T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
         # wei: (B,nH,T,T)
 
         out = wei @ v
         # out: (B,nH,T,sH)
-        out = out.permute(0, 2, 1, 3).reshape((B, T, -1))
+        out = out.transpose(1, 2).reshape((B, T, -1))
         # out: (B,T,nH,sH) -> (B,T,nH*sH) = (B,T,C)
         return out
 
@@ -124,15 +125,18 @@ class MultiHeadAttention(nn.Module):
 
 
 class Block(nn.Module):
-    # TODO: add layernorm and residual connection
+    # TODO: add layernorm, residual connection, and dropout
     def __init__(self, n_emb, n_heads):
         super().__init__()
         self.linlayer = nn.Linear(n_emb, n_emb)
-        self.attention = MultiHeadAttention(n_heads, n_emb / n_heads)
+        self.attention = MultiHeadAttention(n_heads, n_emb // n_heads)
+        self.layernorm = nn.LayerNorm(n_embd)
 
     def forward(self, x):
-        x = self.linlayer(x)
-        x = self.attention(x)
+        res = self.linlayer(x)
+        res = self.attention(res)
+        res = self.layernorm(res)
+        x = x + res
         return x
 
 
@@ -141,20 +145,52 @@ class Predictor(nn.Module):
     def __init__(self, n_emb):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, n_emb)
-        self.block = Block(n_emb, 4)
+        self.block1 = Block(n_emb, 4)
+        self.block2 = Block(n_emb, 4)
         self.linear = nn.Linear(n_emb, vocab_size)
 
-    def forward(self, x):   # (B,T) -> (B,T,n_emb) -> machine -> (B,T,vocab_size)
-        x = self.emb(x)
-        x = self.block(x)
-        x = self.linear(x)
+    def forward(self, x, y=None):   # (B,T) -> (B,T,n_emb) -> machine -> (B,T,vocab_size)
+        emb = self.emb(x)
+        x = self.block1(emb)
+        x = self.block2(x)
+        logits = self.linear(x)
+
+        loss = None
+        if y != None:
+            logits = logits.view(-1, vocab_size)
+            targets = y.view(-1)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    def generate(self, x, max_tokens):
+        for _ in range(max_tokens):
+            logits, loss = self(x[:, -8:])
+            logits = logits[:, -1, :]
+            probs = F.softmax(logits, dim=1)
+            new_x = torch.multinomial(probs, num_samples=1)
+            x = torch.cat((x, new_x), dim=1)
         return x
 
 
 if __name__ == '__main__':
-    print('<CASUAL DEBUG>\n')
-    print(text[:100])
+    print('<CASUAL DEBUG>')
+    print(f'CUDA active: {torch.cuda.is_available()}\n')
 
-    xb, yb = get_batch(0.8)
+    model = Predictor(n_embd)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    print(xb.shape, yb.shape)
+    max_steps = 5000
+    for i in range(1, max_steps+1):
+        xtr, ytr = get_batch('train')
+        optimizer.zero_grad()
+        logits, loss = model(xtr, ytr)
+        loss.backward()
+        optimizer.step()
+        if i % 200 == 0:
+            print(f'step {i}/{max_steps}: {loss.item():.3f}')
+
+    x = torch.zeros((1, 1), dtype=torch.long)
+    test = model.generate(x, 250)
+
+    print(''.join(decode(test[0].tolist())))
